@@ -1,0 +1,169 @@
+---
+resource_types:
+      - name: google-cloud-storage
+        type: docker-image
+        source:
+            repository: frodenas/gcs-resource
+
+resources:
+    - name: cf-deployment-concourse-tasks
+      type: git
+      source:
+          branch: master
+          uri: https://github.com/cloudfoundry/cf-deployment-concourse-tasks
+
+    - name: cli-ci
+      type: git
+      source:
+          uri: https://github.com/cloudfoundry/cli
+          branch: master
+          path: ci
+
+    - name: bbl-state
+      type: git
+      source:
+          uri: https://source.developers.google.com/p/((google_source_project))/r/((google_source_repo))
+          username: ((google_source_username))
+          password: ((google_source_password))
+          branch: ((google_source_branch))
+
+    - name: git-bosh-release
+      type: git
+      source:
+        uri: ((bosh-release-git-repo))
+        branch: ((bosh-release-git-branch))
+ 
+    - name: semver-storage
+      type: semver
+      source:
+        driver: gcs
+        bucket: ((gcs_bucket_name))
+        initial_version: ((semver_initial_version))
+        key: ((semver_current_version_key))
+        json_key: ((google_account_creds))
+
+    #- name: gcs-bucket
+    #  type: google-cloud-storage
+    #  source:
+    #      bucket: ((gcs_bucket_name))
+    #      json_key: ((google_account_creds))
+    #      regexp: releases/release-(.*).tgz
+
+jobs:
+    - name: setup-infrastructure
+      build_logs_to_retain: 100
+      plan:
+          - aggregate:
+              - get: cf-deployment-concourse-tasks
+              - get: bbl-state
+              - get: cli-ci
+          - task: setup-infrastructure
+            file: cf-deployment-concourse-tasks/bbl-up/task.yml
+            input_mapping:
+                env-repo: bbl-state
+                ops-files: bbl-state
+                updated-bbl-state: bbl-state
+            params:
+                BBL_IAAS: gcp
+                BBL_GCP_SERVICE_ACCOUNT_KEY: ((google_account_creds))
+                BBL_GCP_PROJECT_ID: ((gcp_project_name))
+                BBL_GCP_REGION: ((gcp_region))
+                BBL_GCP_ZONE: ((gcp_zone))
+                BBL_ENV_NAME: ((gcp_project_name))
+                BBL_LB_CERT: ((cf_ssl_cert))
+                BBL_LB_KEY: ((cf_ssl_cert_private_key))
+                LB_DOMAIN: ((gcp_lb_domain))
+                SKIP_LB_CREATION: true
+            ensure:
+                put: bbl-state
+                params:
+                    repository: updated-env-repo
+                    rebase: true
+
+    - name: deploy
+      build_logs_to_retain: 100
+      plan:
+          - aggregate:
+              - get: cf-deployment-concourse-tasks
+              - get: bbl-state
+                passed: [setup-infrastructure]
+                trigger: true
+              - get: git-bosh-release
+              - get: cli-ci
+              - get: semver-storage
+                params: {bump: patch}
+
+          - task: upload-stemcell
+            file: cf-deployment-concourse-tasks/bosh-upload-stemcell-from-cf-deployment/task.yml
+            input_mapping:
+                env-repo: bbl-state
+                ops-files: bbl-state
+                cf-deployment: git-bosh-release
+            params:
+                INSFRASTRUCTURE: google
+                MANIFEST_FILE: ((bosh-release-manifest-name))
+
+          - task: create-and-upload-release
+            input_mapping:
+                env-repo: bbl-state
+                cf-deployment: git-bosh-release
+            config:
+                platform: linux
+                image_resource: 
+                    type: docker-image
+                    source:
+                        repository: relintdockerhubpushbot/cf-deployment-concourse-tasks
+                inputs:
+                  - name: cf-deployment
+                  - name: semver-storage
+                  - name: env-repo
+                  - name: cf-deployment-concourse-tasks
+                outputs:
+                  - name: release
+                params:
+                    MANIFEST_FILE: ((bosh-release-manifest-name))
+                    VARS_STORE_FILE: bbl-state
+                    VARS_FILES: ""
+                    SYSTEM_DOMAIN: ((gcp_lb_domain))
+                    OPS_FILES: ""
+                    FAIL_ON_DOWNTIME: false
+                    USE_VARS_STORE: false
+                    BBL_STATE_DIR: bbl-state
+                run:
+                  path: bash
+                  args: 
+                      - -exc
+                      - |
+                          source cf-deployment-concourse-tasks/shared-functions
+                          VERSION=$(cat semver-storage/version)
+                          function main() {
+                              setup_bosh_env_vars
+                              bosh_interpolate
+                              bosh -n create-release --force --dir cf-deployment
+                              bosh -n upload-release --dir cf-deployment
+                          }
+                          
+                          trap close_bbl_ssh_connection_and_commit_vars_store EXIT
+                          main
+
+          - put: semver-storage
+            params: { file: semver-storage/version }
+
+          - task: deploy release
+            file: cf-deployment-concourse-tasks/bosh-deploy/task.yml
+            input_mapping:
+                env-repo: bbl-state
+                vars-store: bbl-state
+                ops-files: bbl-state
+                cf-deployment: git-bosh-release
+                vars-files: bbl-state
+                updated-vars-store: bbl-state
+            params:
+                SYSTEM_DOMAIN: ((gcp_lb_domain))
+                OPS_FILES: ""
+                MANIFEST_FILE: ((bosh-release-manifest-name))
+            ensure:
+                put: bbl-state
+                params:
+                    repository: updated-vars-store
+                    rebase: true
