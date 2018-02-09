@@ -1,3 +1,4 @@
+# Concourse pipeline for https://github.com/FINkit/buildstack-boshrelease
 fly -t concourse auth
 
 fly -t concourse set-pipeline -c pipeline.yml -p <name> --load-vars-from credentials.yml
