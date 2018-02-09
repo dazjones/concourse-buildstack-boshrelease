@@ -42,12 +42,12 @@ resources:
         key: ((semver_current_version_key))
         json_key: ((google_account_creds))
 
-    #- name: gcs-bucket
-    #  type: google-cloud-storage
-    #  source:
-    #      bucket: ((gcs_bucket_name))
-    #      json_key: ((google_account_creds))
-    #      regexp: releases/release-(.*).tgz
+    - name: gcs-bucket
+      type: google-cloud-storage
+      source:
+          bucket: ((gcs_bucket_name))
+          json_key: ((google_account_creds))
+          regexp: releases/release-(.*).tgz
 
 jobs:
     - name: setup-infrastructure
@@ -136,6 +136,7 @@ jobs:
                       - |
                           source cf-deployment-concourse-tasks/shared-functions
                           VERSION=$(cat semver-storage/version)
+
                           function main() {
                               setup_bosh_env_vars
                               bosh_interpolate
@@ -145,6 +146,10 @@ jobs:
                           
                           trap close_bbl_ssh_connection_and_commit_vars_store EXIT
                           main
+                          tar -czf release/release-$VERSION.tgz cf-deployment
+
+          - put: gcs-bucket
+            params: { file: release/release-*.tgz }
 
           - put: semver-storage
             params: { file: semver-storage/version }
