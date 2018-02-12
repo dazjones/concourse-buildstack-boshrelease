@@ -19,7 +19,7 @@ resources:
           branch: master
           path: ci
 
-    - name: bbl-state
+    - name: env-repo
       type: git
       source:
           uri: https://source.developers.google.com/p/((google_source_project))/r/((google_source_repo))
@@ -61,14 +61,14 @@ jobs:
       plan:
           - aggregate:
               - get: cf-deployment-concourse-tasks
-              - get: bbl-state
+              - get: env-repo
               - get: cli-ci
           - task: setup-infrastructure
             file: cf-deployment-concourse-tasks/bbl-up/task.yml
             input_mapping:
-                env-repo: bbl-state
-                ops-files: bbl-state
-                updated-bbl-state: bbl-state
+                env-repo: env-repo
+                ops-files: env-repo
+                updated-env-repo: env-repo
             params:
                 BBL_IAAS: gcp
                 BBL_GCP_SERVICE_ACCOUNT_KEY: ((google_account_creds))
@@ -81,17 +81,41 @@ jobs:
                 LB_DOMAIN: ((gcp_lb_domain))
                 SKIP_LB_CREATION: true
             ensure:
-                put: bbl-state
+                put: env-repo
                 params:
                     repository: updated-env-repo
                     rebase: true
+
+    - name: setup-cloudsql
+      build_logs_to_retain: 100
+      plan:
+        - aggregate:
+            - get: cf-deployment-concourse-tasks
+            - get: concourse-tasks
+            - get: env-repo
+
+        - task: setup
+          file: concourse-tasks/cloudsql-setup/task.yml
+          input_mapping:
+            env-repo: env-repo
+            vars-store: env-repo
+            updated-env-repo: env-repo
+          params:
+            GCP_PROJECT: ((gcp_project_name))
+            GOOGLE_CREDENTIALS: ((google_account_creds))
+            GIT_COMMIT_USERNAME:
+            GIT_COMMIT_EMAIL:
+        - put: env-repo
+          params:
+            repository: updated-env-repo
+            rebase: true
 
     - name: deploy
       build_logs_to_retain: 100
       plan:
           - aggregate:
               - get: cf-deployment-concourse-tasks
-              - get: bbl-state
+              - get: env-repo
                 passed: [setup-infrastructure]
                 trigger: true
               - get: git-bosh-release
@@ -103,8 +127,8 @@ jobs:
           - task: upload-stemcell
             file: cf-deployment-concourse-tasks/bosh-upload-stemcell-from-cf-deployment/task.yml
             input_mapping:
-                env-repo: bbl-state
-                ops-files: bbl-state
+                env-repo: env-repo
+                ops-files: env-repo
                 cf-deployment: git-bosh-release
             params:
                 INSFRASTRUCTURE: google
@@ -113,11 +137,11 @@ jobs:
           - task: create-and-upload-release
             file: concourse-tasks/bosh-deploy/task.yml
             input_mapping:
-                env-repo: bbl-state
+                env-repo: env-repo
                 cf-deployment: git-bosh-release
-                vars-store: bbl-state
-                ops-files: bbl-state
-                vars-files: bbl-state
+                vars-store: env-repo
+                ops-files: env-repo
+                vars-files: env-repo
                 cf-deployment-concourse-tasks: cf-deployment-concourse-tasks
 
             params:
@@ -139,19 +163,19 @@ jobs:
           - task: deploy release
             file: cf-deployment-concourse-tasks/bosh-deploy/task.yml
             input_mapping:
-                env-repo: bbl-state
-                vars-store: bbl-state
-                ops-files: bbl-state
+                env-repo: env-repo
+                vars-store: env-repo
+                ops-files: env-repo
                 cf-deployment: git-bosh-release
-                vars-files: bbl-state
-                updated-vars-store: bbl-state
+                vars-files: env-repo
+                updated-vars-store: env-repo
                 concourse-tasks: concourse-tasks
             params:
                 SYSTEM_DOMAIN: ((gcp_lb_domain))
                 OPS_FILES: ""
                 MANIFEST_FILE: ((bosh-release-manifest-name))
             ensure:
-                put: bbl-state
+                put: env-repo
                 params:
                     repository: updated-vars-store
                     rebase: true
