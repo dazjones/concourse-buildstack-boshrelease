@@ -135,7 +135,7 @@ jobs:
                 MANIFEST_FILE: ((bosh-release-manifest-name))
 
           - task: create-and-upload-release
-            file: concourse-tasks/bosh-deploy/task.yml
+            file: concourse-tasks/create-and-upload-release/task.yml
             input_mapping:
                 env-repo: env-repo
                 cf-deployment: git-bosh-release
