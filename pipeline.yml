@@ -27,6 +27,12 @@ resources:
           password: ((google_source_password))
           branch: ((google_source_branch))
 
+    - name: concourse-tasks
+      type: git
+      source:
+        uri: https://github.com/dazjones/concourse-tasks
+        branch: master
+
     - name: git-bosh-release
       type: git
       source:
@@ -91,6 +97,7 @@ jobs:
               - get: git-bosh-release
               - get: cli-ci
               - get: semver-storage
+              - get: concourse-tasks
                 params: {bump: patch}
 
           - task: upload-stemcell
@@ -104,49 +111,24 @@ jobs:
                 MANIFEST_FILE: ((bosh-release-manifest-name))
 
           - task: create-and-upload-release
+            file: concourse-tasks/bosh-deploy/task.yml
             input_mapping:
                 env-repo: bbl-state
                 cf-deployment: git-bosh-release
-            config:
-                platform: linux
-                image_resource: 
-                    type: docker-image
-                    source:
-                        repository: relintdockerhubpushbot/cf-deployment-concourse-tasks
-                inputs:
-                  - name: cf-deployment
-                  - name: semver-storage
-                  - name: env-repo
-                  - name: cf-deployment-concourse-tasks
-                outputs:
-                  - name: release
-                params:
-                    MANIFEST_FILE: ((bosh-release-manifest-name))
-                    VARS_STORE_FILE: bbl-state
-                    VARS_FILES: ""
-                    SYSTEM_DOMAIN: ((gcp_lb_domain))
-                    OPS_FILES: ""
-                    FAIL_ON_DOWNTIME: false
-                    USE_VARS_STORE: false
-                    BBL_STATE_DIR: bbl-state
-                run:
-                  path: bash
-                  args: 
-                      - -exc
-                      - |
-                          source cf-deployment-concourse-tasks/shared-functions
-                          VERSION=$(cat semver-storage/version)
+                vars-store: bbl-state
+                ops-files: bbl-state
+                vars-files: bbl-state
+                cf-deployment-concourse-tasks: cf-deployment-concourse-tasks
 
-                          function main() {
-                              setup_bosh_env_vars
-                              bosh_interpolate
-                              bosh -n create-release --force --dir cf-deployment
-                              bosh -n upload-release --dir cf-deployment
-                          }
-                          
-                          trap close_bbl_ssh_connection_and_commit_vars_store EXIT
-                          main
-                          tar -czf release/release-$VERSION.tgz cf-deployment
+            params:
+                MANIFEST_FILE: ((bosh-release-manifest-name))
+                VARS_STORE_FILE: bbl-state
+                VARS_FILES: ""
+                SYSTEM_DOMAIN: ((gcp_lb_domain))
+                OPS_FILES: ""
+                FAIL_ON_DOWNTIME: false
+                USE_VARS_STORE: false
+                BBL_STATE_DIR: bbl-state
 
           - put: gcs-bucket
             params: { file: release/release-*.tgz }
@@ -163,6 +145,7 @@ jobs:
                 cf-deployment: git-bosh-release
                 vars-files: bbl-state
                 updated-vars-store: bbl-state
+                concourse-tasks: concourse-tasks
             params:
                 SYSTEM_DOMAIN: ((gcp_lb_domain))
                 OPS_FILES: ""
